@@ -1,6 +1,8 @@
 Transactional EJB Timers (persisted with postgresql) in jBPM
 ========================================================
 
+This project is used as a reproducer to validate fix provided by [jbpm#1926](https://github.com/kiegroup/jbpm/pull/1926)
+
 ## Building
 
 For building this project locally, you firstly need to have the following tools installed locally:
@@ -9,18 +11,16 @@ For building this project locally, you firstly need to have the following tools 
 - Maven
 - docker (because of testcontainers makes use of it).
 
-Once you cloned the repository locally all you need to do is execute the following Maven build (for cluster scenarios):
+Once you cloned the repository locally all you need to do is execute the following Maven build:
 
 ```
 mvn clean install
 ```
 
-and the following for no-cluster scenarios:
-
+Following properties at the pom may be tuned:
 ```
-mvn clean install -Dorg.kie.samples.ejbtimer.nocluster=true
+<org.jbpm.ejb.timer.local.cache>false</org.jbpm.ejb.timer.local.cache>
+<org.jbpm.ejb.timer.tx>true</org.jbpm.ejb.timer.tx>
 ```
-
-This project is using only `kie-server-showcase` image but it is prepared for adding other images at any other profile (current default profile is *kie-server*).
 
 Happy confirmation testing!! :tada::tada::tada:
