@@ -1,59 +1,48 @@
 package org.kie.samples.integration;
 
-import static java.util.Collections.singletonMap;
-
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import java.io.File;
-import java.io.IOException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
-import org.apache.commons.io.FileUtils;
-import org.junit.After;
-import org.junit.AfterClass;
-import org.junit.Before;
-import org.junit.BeforeClass;
-import org.junit.ClassRule;
-import org.junit.Test;
-import org.junit.jupiter.api.DisplayName;
-import org.kie.api.task.model.Status;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.TestTemplate;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.kie.samples.integration.testcontainers.KieServerContainer;
 import org.kie.server.api.marshalling.MarshallingFormat;
 import org.kie.server.api.model.KieContainerResource;
 import org.kie.server.api.model.ReleaseId;
-import org.kie.server.api.model.instance.ProcessInstance;
-import org.kie.server.api.model.instance.TaskSummary;
 import org.kie.server.client.KieServicesClient;
 import org.kie.server.client.KieServicesConfiguration;
 import org.kie.server.client.KieServicesFactory;
 import org.kie.server.client.ProcessServicesClient;
-import org.kie.server.client.QueryServicesClient;
-import org.kie.server.client.UserTaskServicesClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.output.Slf4jLogConsumer;
+import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
 import com.github.dockerjava.api.DockerClient;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
 @Testcontainers(disabledWithoutDocker=true)
-public class TxEJBTimerSystemTest {
+class TxEJBTimerSystemTest {
     
     public static final String SELECT_PARTITION_NAME_FROM_JBOSS_EJB_TIMER = "select partition_name from jboss_ejb_timer";
+    public static final String PREFIX_DOCKERFILE_PATH = "src/test/resources/etc/Dockerfile";
     public static final String PREFIX_CLI_PATH = "src/test/resources/etc/jbpm-custom-";
     public static final String SELECT_COUNT_FROM_JBOSS_EJB_TIMER = "select count(*) from jboss_ejb_timer";
     public static final String ARTIFACT_ID = "tx-ejb-sample";
@@ -68,19 +57,19 @@ public class TxEJBTimerSystemTest {
 
     private static Logger logger = LoggerFactory.getLogger(TxEJBTimerSystemTest.class);
     
-    private static Map<String, String> args = new HashMap<>();
+    protected static Map<String, String> args = new HashMap<>();
 
     static {
         args.put("IMAGE_NAME", System.getProperty("org.kie.samples.image"));
         args.put("START_SCRIPT", System.getProperty("org.kie.samples.script"));
         args.put("SERVER", System.getProperty("org.kie.samples.server"));
-        createCLIFile("node1");
+        args.put("cache", System.getProperty("org.jbpm.ejb.timer.local.cache"));
+        args.put("timer-tx", System.getProperty("org.jbpm.ejb.timer.tx"));
     }
-
-    @ClassRule
+    
     public static Network network = Network.newNetwork();
     
-    @ClassRule
+    @Container
     public static PostgreSQLContainer<?> postgreSQLContainer = new PostgreSQLContainer<>(System.getProperty("org.kie.samples.image.postgresql","postgres:latest"))
                                         .withDatabaseName("rhpamdatabase")
                                         .withUsername("rhpamuser")
@@ -93,17 +82,16 @@ public class TxEJBTimerSystemTest {
                                         .withNetworkAliases("postgresql11");
     
     
-    @ClassRule
-    public static KieServerContainer kieServer = new KieServerContainer("node1", network, args);
+    @Container
+    public static KieServerContainer kieServer = new KieServerContainer(network, args);
     
     private static KieServicesClient ksClient;
     
     private static ProcessServicesClient processClient;
-    private static UserTaskServicesClient taskClient;
     
     private static HikariDataSource ds;
     
-    @BeforeClass
+    @BeforeAll
     public static void setup() {
         logger.info("KIE SERVER 1 started at port "+kieServer.getKiePort());
         logger.info("postgresql started at "+postgreSQLContainer.getJdbcUrl());
@@ -111,17 +99,16 @@ public class TxEJBTimerSystemTest {
         ksClient = authenticate(kieServer.getKiePort(), DEFAULT_USER, DEFAULT_PASSWORD);
         
         processClient = ksClient.getServicesClient(ProcessServicesClient.class);
-        taskClient = ksClient.getServicesClient(UserTaskServicesClient.class);
         
         ds = getDataSource();
     }
     
-    @Before
+    @BeforeEach
     public void before() {
         createContainer(ksClient);
     }
 
-    @AfterClass
+    @AfterAll
     public static void tearDown() throws Exception {
         DockerClient docker = DockerClientFactory.instance().client();
         docker.listImagesCmd().withLabelFilter("autodelete=true").exec().stream()
@@ -129,7 +116,7 @@ public class TxEJBTimerSystemTest {
          .forEach(c -> docker.removeImageCmd(c.getId()).withForce(true).exec());
     }
     
-    @After
+    @AfterEach
     public void after() throws Exception {
         ksClient.disposeContainer(containerId);
         
@@ -137,26 +124,9 @@ public class TxEJBTimerSystemTest {
                 0, performQuery(SELECT_COUNT_FROM_JBOSS_EJB_TIMER).getInt(1));
     }
 
-    @Test
-    @DisplayName("test executing a subprocess with an intermediate timer and a script that sends an exception")
-    public void testTimerFailSubprocess() throws Exception {
-        startProcessAndSignal("timer-fail-subprocess", 1);
-    }
-    
-    @Test
-    @DisplayName("test executing a subprocess with a boundary timer in a human task and a script that sends an exception")
-    public void testBoundaryFailSubprocess() throws Exception {
-        startProcessAndSignal("boundary-subprocess", 2);
-    }
-    
-    @Test
-    @DisplayName("test executing a subprocess with a gateway diverging to a human task with boundary timer and a script that sends an exception")
-    public void testBoundaryGatewaySubprocess() throws Exception {
-        startProcessAndSignal("boundary-gateway-subprocess", 1);
-    }
-    
-
-    private void startProcessAndSignal(String processId, int expectedTimersAfterRollback) throws InterruptedException, SQLException {
+    @ParameterizedTest
+    @CsvSource({"timer-fail-subprocess,1", "boundary-subprocess,2", "boundary-gateway-subprocess,1"})
+    void testEJBTimerWithRollback(String processId, int expectedTimersAfterRollback) throws InterruptedException, SQLException {
         Long processInstanceId = processClient.startProcess(containerId, processId);
         
         assertTrue(processInstanceId>0);
@@ -174,7 +144,7 @@ public class TxEJBTimerSystemTest {
         Thread.sleep(5000);
         
         assertEquals("there should be "+expectedTimersAfterRollback+" timer at the table after the rollback",
-                expectedTimersAfterRollback, performQuery(SELECT_COUNT_FROM_JBOSS_EJB_TIMER).getInt(1));
+                      expectedTimersAfterRollback, performQuery(SELECT_COUNT_FROM_JBOSS_EJB_TIMER).getInt(1));
     }
     
     private static void createContainer(KieServicesClient client) {
@@ -182,21 +152,6 @@ public class TxEJBTimerSystemTest {
         KieContainerResource resource = new KieContainerResource(containerId, releaseId);
         resource.setContainerAlias(ARTIFACT_ID + ALIAS);
         client.createContainer(containerId, resource);
-    }
-
-    private static void createCLIFile(String nodeName) {
-        Boolean noCluster = Boolean.getBoolean("org.kie.samples.ejbtimer.nocluster");
-        //if different partitions are defined per nodeName, then there is no cluster for EJB timers
-        String node = noCluster? nodeName : "node1";
-        try {
-             String content = FileUtils.readFileToString(new File(PREFIX_CLI_PATH+"template.cli"), "UTF-8");
-             content = content.replaceAll("%partition_name%", "\\\"ejb_timer_"+node+"_part\\\"");
-             File cliFile = new File(PREFIX_CLI_PATH+nodeName+".cli");
-             FileUtils.writeStringToFile(cliFile, content, "UTF-8");
-             cliFile.deleteOnExit();
-          } catch (IOException e) {
-             throw new RuntimeException("Generating file failed", e);
-          }
     }
 
     private static KieServicesClient authenticate(int port, String user, String password) {
